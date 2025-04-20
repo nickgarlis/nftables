@@ -15,3 +15,5 @@ require (
 	golang.org/x/net v0.37.0 // indirect
 	golang.org/x/sync v0.6.0 // indirect
 )
+
+replace github.com/mdlayher/netlink => github.com/nickgarlis/netlink v0.0.0-20250404084831-a37116722b14
