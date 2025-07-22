@@ -7429,3 +7429,70 @@ func TestAutoBufferSize(t *testing.T) {
 		t.Fatalf("failed to flush: %v", err)
 	}
 }
+
+func TestGetSetElementsOrder(t *testing.T) {
+	conn, newNS := nftest.OpenSystemConn(t, *enableSysTests)
+	defer nftest.CleanupSystemConn(t, newNS)
+	conn.FlushRuleset()
+	defer conn.FlushRuleset()
+
+	table := conn.AddTable(&nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   "test-table",
+	})
+
+	set := &nftables.Set{
+		Name:     "test-set",
+		Table:    table,
+		KeyType:  nftables.TypeIPAddr,
+		Interval: true,
+	}
+
+	elements := []nftables.SetElement{
+		// 10.0.0.0/24
+		{
+			Key: net.IPv4(10, 0, 0, 0).To4(),
+		},
+		{
+			Key:         net.IPv4(10, 0, 1, 0).To4(),
+			IntervalEnd: true,
+		},
+		// 1.1.1.1/32
+		{
+			Key: net.IPv4(1, 1, 1, 1).To4(),
+		},
+		{
+			Key:         net.IPv4(1, 1, 1, 1).To4(),
+			IntervalEnd: true,
+		},
+	}
+
+	if err := conn.AddSet(set, elements); err != nil {
+		t.Fatalf("failed to add set: %v", err)
+	}
+
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("failed to flush: %v", err)
+	}
+
+	got, err := conn.GetSetElements(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != len(elements) {
+		t.Fatalf("expected %d elements, got %d", len(elements), len(got))
+	}
+
+	for i, elem := range got {
+		if !bytes.Equal(elem.Key, elements[i].Key) {
+			t.Errorf("element %d key mismatch: got %v, want %v", i, elem.Key, elements[i].Key)
+		}
+		if elem.IntervalEnd != elements[i].IntervalEnd {
+			t.Errorf("element %d IntervalEnd mismatch: got %v, want %v", i, elem.IntervalEnd, elements[i].IntervalEnd)
+		}
+		if elem.Comment != elements[i].Comment {
+			t.Errorf("element %d comment mismatch: got %q, want %q", i, elem.Comment, elements[i].Comment)
+		}
+	}
+}
