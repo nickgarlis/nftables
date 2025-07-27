@@ -7429,3 +7429,60 @@ func TestAutoBufferSize(t *testing.T) {
 		t.Fatalf("failed to flush: %v", err)
 	}
 }
+
+func TestFlushSet(t *testing.T) {
+	conn, newNS := nftest.OpenSystemConn(t, *enableSysTests)
+	defer nftest.CleanupSystemConn(t, newNS)
+	conn.FlushRuleset()
+	defer conn.FlushRuleset()
+
+	for i := range 100 {
+		table := &nftables.Table{
+			Name:   "test-table",
+			Family: nftables.TableFamilyIPv4,
+		}
+		conn.AddTable(table)
+
+		set := &nftables.Set{
+			Name:    "test-set",
+			Table:   table,
+			IsMap:   false,
+			KeyType: nftables.TypeInetService,
+		}
+
+		if err := conn.AddSet(set, nil); err != nil {
+			t.Fatalf("failed to add set: %v", err)
+		}
+
+		maxUint16 := 65535
+
+		elements := make([]nftables.SetElement, maxUint16-1)
+		for j := 0; j < maxUint16-1; j++ {
+			elements[j] = nftables.SetElement{
+				Key: binaryutil.BigEndian.PutUint16(uint16(j + 1)),
+			}
+		}
+
+		if err := conn.SetAddElements(set, elements); err != nil {
+			t.Fatalf("failed to add elements: %v", err)
+		}
+
+		if err := conn.Flush(); err != nil {
+			t.Fatalf("failed to flush after %d iterations: %v", i, err)
+		}
+
+		conn.FlushSet(set)
+
+		if err := conn.Flush(); err != nil {
+			t.Fatalf("failed to flush after flushing set after %d iterations: %v", i, err)
+		}
+
+		elems, err := conn.GetSetElements(set)
+		if err != nil {
+			t.Fatalf("failed to get set elements after flush: %v", err)
+		}
+		if len(elems) != 0 {
+			t.Fatalf("expected set to be empty after flush, got %d elements", len(elems))
+		}
+	}
+}
