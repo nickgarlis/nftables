@@ -7429,3 +7429,37 @@ func TestAutoBufferSize(t *testing.T) {
 		t.Fatalf("failed to flush: %v", err)
 	}
 }
+
+func TestInvalidSetError(t *testing.T) {
+	conn, newNS := nftest.OpenSystemConn(t, *enableSysTests)
+	defer nftest.CleanupSystemConn(t, newNS)
+	conn.FlushRuleset()
+	defer conn.FlushRuleset()
+
+	table := conn.AddTable(&nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   "test-table",
+	})
+
+	// Create an anonymous set that is not constant to trigger an error
+	set := &nftables.Set{
+		Table:     table,
+		KeyType:   nftables.TypeIPAddr,
+		Anonymous: true,
+	}
+	err := conn.AddSet(set, []nftables.SetElement{})
+	if err == nil {
+		t.Error("expected error when adding an anonymous that is not constant")
+	}
+
+	// The message buffer is now incomplete. It is missing the invalid set.
+	// This makes it so that the flush succeeds, but the set is not created.
+	if err := conn.Flush(); err == nil {
+		t.Errorf("expected error when flushing rules with an invalid set, got nil")
+	}
+
+	createdTable, err := conn.ListTable(table.Name)
+	if createdTable != nil || err == nil {
+		t.Fatalf("expected table to not exist, got %v, error: %v", createdTable, err)
+	}
+}
