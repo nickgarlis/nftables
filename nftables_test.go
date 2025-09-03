@@ -7560,3 +7560,69 @@ func TestFlushWithGenID(t *testing.T) {
 		t.Errorf("expected table to not exist, got: %v", table)
 	}
 }
+
+func TestInvalidMessage(t *testing.T) {
+	conn, err := nftables.New()
+	if err != nil {
+		t.Fatalf("nftables.New() failed: %v", err)
+	}
+
+	conn.DestroyTable(&nftables.Table{
+		Name:   "test-table",
+		Family: nftables.TableFamilyINet,
+	})
+
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+
+	table := conn.AddTable(&nftables.Table{
+		Name:   "test-table",
+		Family: nftables.TableFamilyINet,
+	})
+
+	chain := conn.AddChain(&nftables.Chain{
+		Name:     "test-chain",
+		Table:    table,
+		Priority: nftables.ChainPriorityFilter,
+		Hooknum:  nftables.ChainHookInput,
+	})
+
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Ct{
+				Key:      expr.CtKeySRC,
+				Register: 1,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     net.ParseIP("c000:201::").To16(),
+			},
+			&expr.Counter{},
+		},
+	})
+
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Ct{
+				Key:      expr.CtKeySRC,
+				Register: 1,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{192, 0, 2, 1},
+			},
+			&expr.Counter{},
+		},
+	})
+
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+}
