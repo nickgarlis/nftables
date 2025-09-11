@@ -80,7 +80,12 @@ func (cc *Conn) GetRule(t *Table, c *Chain) ([]*Rule, error) {
 // handle.
 // https://docs.kernel.org/networking/netlink_spec/nftables.html#getrule
 func (cc *Conn) GetRuleByHandle(t *Table, c *Chain, handle uint64) (*Rule, error) {
-	rules, err := cc.getRules(t, c, unix.NFT_MSG_GETRULE, handle)
+	msg, err := cc.getRuleMsg(t, c, unix.NFT_MSG_GETRULE, handle)
+	if err != nil {
+		return nil, err
+	}
+
+	rules, err := cc.sendRuleMsg(msg, t.Family)
 	if err != nil {
 		return nil, err
 	}
@@ -94,49 +99,39 @@ func (cc *Conn) GetRuleByHandle(t *Table, c *Chain, handle uint64) (*Rule, error
 
 // GetRules returns the rules in the specified table and chain.
 func (cc *Conn) GetRules(t *Table, c *Chain) ([]*Rule, error) {
-	return cc.getRules(t, c, unix.NFT_MSG_GETRULE, 0)
-}
-
-// ResetRule resets the stateful expressions (e.g., counters) of the given
-// rule. The reset is applied immediately (no Flush is required). The returned
-// rule reflects its state prior to the reset. The provided rule must have a
-// valid Handle.
-// https://docs.kernel.org/networking/netlink_spec/nftables.html#getrule-reset
-func (cc *Conn) ResetRule(t *Table, c *Chain, handle uint64) (*Rule, error) {
-	if handle == 0 {
-		return nil, fmt.Errorf("rule must have a valid handle")
-	}
-
-	rules, err := cc.getRules(t, c, unix.NFT_MSG_GETRULE_RESET, handle)
+	msg, err := cc.getRuleMsg(t, c, unix.NFT_MSG_GETRULE, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	if got, want := len(rules), 1; got != want {
-		return nil, fmt.Errorf("expected rule count %d, got %d", want, got)
-	}
-
-	return rules[0], nil
+	return cc.sendRuleMsg(msg, t.Family)
 }
 
-// ResetRules resets the stateful expressions (e.g., counters) of all rules
-// in the given table and chain. The reset is applied immediately (no Flush
-// is required). The returned rules reflect their state prior to the reset.
-// state.
+// ResetRule resets the stateful expressions (e.g., counters) of the given
+// rule.
 // https://docs.kernel.org/networking/netlink_spec/nftables.html#getrule-reset
-func (cc *Conn) ResetRules(t *Table, c *Chain) ([]*Rule, error) {
-	return cc.getRules(t, c, unix.NFT_MSG_GETRULE_RESET, 0)
+func (cc *Conn) ResetRule(t *Table, c *Chain, handle uint64) error {
+	if handle == 0 {
+		return fmt.Errorf("rule must have a valid handle")
+	}
+
+	msg, err := cc.getRuleMsg(t, c, unix.NFT_MSG_GETRULE_RESET, handle)
+	if err != nil {
+		return err
+	}
+
+	cc.messages = append(cc.messages, netlinkMessage{
+		Header: msg.Header,
+		Data:   msg.Data,
+	})
+
+	return nil
 }
 
 // getRules retrieves rules from the given table and chain, using the provided
 // msgType (either unix.NFT_MSG_GETRULE or unix.NFT_MSG_GETRULE_RESET). If the
 // handle is non-zero, the operation applies only to the rule with that handle.
-func (cc *Conn) getRules(t *Table, c *Chain, msgType int, handle uint64) ([]*Rule, error) {
-	conn, closer, err := cc.netlinkConn()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = closer() }()
+func (cc *Conn) getRuleMsg(t *Table, c *Chain, msgType int, handle uint64) (netlink.Message, error) {
 
 	attrs := []netlink.Attribute{
 		{Type: unix.NFTA_RULE_TABLE, Data: []byte(t.Name + "\x00")},
@@ -156,7 +151,7 @@ func (cc *Conn) getRules(t *Table, c *Chain, msgType int, handle uint64) ([]*Rul
 
 	data, err := netlink.MarshalAttributes(attrs)
 	if err != nil {
-		return nil, err
+		return netlink.Message{}, err
 	}
 
 	message := netlink.Message{
@@ -167,17 +162,27 @@ func (cc *Conn) getRules(t *Table, c *Chain, msgType int, handle uint64) ([]*Rul
 		Data: append(extraHeader(uint8(t.Family), 0), data...),
 	}
 
-	if _, err := conn.SendMessages([]netlink.Message{message}); err != nil {
+	return message, nil
+}
+
+func (cc *Conn) sendRuleMsg(msg netlink.Message, fam TableFamily) ([]*Rule, error) {
+	conn, closer, err := cc.netlinkConn()
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = closer() }()
+	if _, err := conn.SendMessages([]netlink.Message{msg}); err != nil {
 		return nil, fmt.Errorf("SendMessages: %v", err)
 	}
 
-	reply, err := receiveAckAware(conn, message.Header.Flags)
+	reply, err := receiveAckAware(conn, msg.Header.Flags)
 	if err != nil {
 		return nil, fmt.Errorf("receiveAckAware: %v", err)
 	}
 	var rules []*Rule
 	for _, msg := range reply {
-		r, err := ruleFromMsg(t.Family, msg)
+		r, err := ruleFromMsg(fam, msg)
 		if err != nil {
 			return nil, err
 		}
